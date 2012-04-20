@@ -1,0 +1,9 @@
+name = Webform Node Request
+description = A module that creates links to a webform and add's it's title
+dependencies[] = webform
+package = Custom
+core = 6.x
+php = 5.0
+
+version = "6.x-0.1-dev"
+core = "6.x"

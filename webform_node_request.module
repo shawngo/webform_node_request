@@ -1,0 +1,207 @@
+<?php
+
+/**
+ * @file
+ * Webform Node Request Module file
+ *
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function webform_node_request_menu() {
+  $items = array();
+  $items['admin/settings/webform_node_request'] = array(
+    'title' => 'Webform node request settings',
+    'description' => 'Webform Node Request Settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('webform_node_request_admin_settings_form'),
+    'file' => 'webform_node_request.admin.inc',
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['admin/settings/webform_node_request/settings'] = array(
+    'title' => 'Webform Node Request settings',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 0,
+  );
+
+  $items['admin/settings/webform_node_request/configure'] = array(
+    'title' => 'Configuration settings',
+    'description' => 'Webform Node Request Configurations.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('webform_node_request_admin_config_form'),
+    'file' => 'webform_node_request.admin.inc',
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_nodeapi()
+ */
+function webform_node_request_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+  // @TODO change this to something configurable and in the $links var?
+  switch($op) {
+    case 'view':
+      if($node->type == 'product') {
+        $nid = arg(1);
+
+        $node->ask_a_question .= '<ul class="links inline"><li class="ask_a_question first last">'. l('Ask A Question', variable_get('webform_node_request_form', 'node/1'), array('query' => array('nid' => $nid))) .'</li></ul>';
+
+        $webform_node_request_apply_other = trim(variable_get('webform_node_request_apply_other', ''));
+        if($webform_node_request_apply_other) {
+          $node->content['body']['#value'] .= $webform_node_request_apply_other;
+        }
+      }
+      break;
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function webform_node_request_form_alter(&$form, $form_state, $form_id) {
+  global $base_url;
+
+  // This is the form that will be used for the request.
+
+  // @TODO provide a more dynamic approach - select which nodes use which forms? by content type? tax? etc
+  $webform_node_request_form_nid = variable_get('webform_node_request_form_nid', '');
+  $webform_node_request_form_nids = variable_get('webform_node_request_form_nids', array());
+
+  // @TODO - change this to only expect a nid rather than a textfield
+  $webform_node_request_form_nid = str_replace('node/', '', $webform_node_request_form_nid);
+
+  // @TODO - undo the  _form_nid reference above to satisfy its @TODO
+  $webform_node_request_form_nids = array_merge($webform_node_request_form_nids, array($webform_node_request_form_nid));
+
+
+
+  // Check for webform form being viewed and attach dependency flags.
+  if (substr($form_id, 0, 20) == 'webform_client_form_'
+  // Check if there is a node id.
+  && isset($form['#parameters'][2]->nid)
+  // Check if the node id exists in the setting.
+  && in_array($form['#parameters'][2]->nid, $webform_node_request_form_nids)) {
+
+    // List out avaialable types to determine if this form is eligible.
+    $content_types = variable_get('webform_node_request_content_types', array());
+    $available_types = array();
+
+    foreach ($content_types as $key => $ct) {
+      if ($ct == $key) {
+        $available_types[] = $ct;
+      }
+    }
+
+    // Get the node id being requested.
+    $webform_node_request_nid = webform_node_request_get_nid();
+
+    if ($webform_node_request_nid > 0) {
+
+      // Add our node request specific fields and update the action in case
+      // validation fails.
+      $node = node_load($webform_node_request_nid);
+
+      if ($node && in_array($node->type, $available_types)) {
+
+       $view_name = variable_get('webform_node_request_config_types_view_' . $form['#parameters'][2]->nid, '');
+       $view = views_embed_view($view_name, 'default', $webform_node_request_nid);
+
+       $view_email = views_embed_view($view_name, 'block_1', $webform_node_request_nid);
+
+        // Set the title of the request page and add JavaScript.
+       drupal_set_title(check_plain(variable_get('webform_node_request_message', 'Request Quote')) .' '. t($node->title));
+
+       // Add the fieldset describing the requested node.
+       $form['submitted']['webform_node_request'] = array(
+         '#type' => 'fieldset',
+         '#title' => check_plain(variable_get('webform_node_fieldset_legend', 'Request Quote On')),
+         '#weight' => -1,
+         '#attributes' => array('class' => 'webform-nr-fieldset'),
+       );
+
+       // Add title and body description.
+       $form['submitted']['webform_node_request']['title'] = array(
+         '#value' => '<p><strong>'. $node->title .'</strong></p><p>'. $node->body .'</p>' . $view,
+       );
+      }
+
+      // Update form action to submit to current page.
+      $form['#action'] = '/' . variable_get('webform_node_request_form_nid', '') . '?nid=' . $webform_node_request_nid;
+      $form['#action'] = request_uri();
+    }
+
+    $webform_node_request_hidden_public = trim(variable_get('webform_node_request_hidden_public', 'wnr_public_key'));
+    $webform_node_request_hidden = trim(variable_get('webform_node_request_hidden', 'wnr_hidden_key'));
+
+    // If the module settings are configured.
+    if (($webform_node_request_hidden != ''
+       || $webform_node_request_hidden_public != '')
+    // If the form hasn't been posted. // @TODO #submitted?
+    && empty($form_state['post'])
+    // If both values have been set in the form.
+    && (isset($form['submitted']['request_information'][$webform_node_request_hidden])
+       || isset($form['submitted']['request_information'][$webform_node_request_hidden_public]))) {
+
+      // Create the information to be sent with the request.
+      $public_title = drupal_get_title();
+      $hidden_title = $public_title . "\n" . check_plain($node->body) . ' ( '. $base_url . request_uri() . ")\n";
+
+      // Add validation handler and set session value there.
+//      $form['#validate'][] = 'webform_node_request_validate_handler';
+
+      // Add data to form_state's storage array. // @TODO Why?
+      // @TODO leaving this in for b/w compat. I think it can safely be removed.
+      $form_state['storage']['webform_node_request_hidden_public'] = 'FOOOO'.$public_title;
+      $form_state['storage']['webform_node_request_other'] = 'BAAAAR'.$hidden_title;
+
+      // Also adding it to the form, which is the only one passed by reference. // @TODO Why?
+      $form['submitted']['request_information'][$webform_node_request_hidden_public]['#default_value'] = $public_title;
+      $form['submitted']['request_information'][$webform_node_request_hidden]['#default_value'] =  $view_email;
+    }
+  }
+}
+
+
+/**
+ * Validation handler for webform_node_request_form_alter().
+ */
+function webform_node_request_validate_handler($form, &$form_state) {
+
+  // Attach the wnr values to the webform that was saved in form_state[storage].
+  $webform_node_request_hidden = trim(variable_get('webform_node_request_hidden', 'wnr_hidden_key'));
+  $webform_node_request_hidden_public = trim(variable_get('webform_node_request_hidden_public', 'wnr_public_key'));
+
+  // Duplicate our efforts? // @TODO Why?
+  $form['submitted']['request_information'][$webform_node_request_hidden_public]['#default_value'] = $form_state['storage']['webform_node_request_hidden_public'];
+  $form['submitted']['request_information'][$webform_node_request_hidden]['#default_value'] = $form_state['storage']['webform_node_request_other'];
+
+  // Set our form values.
+  form_set_value($form['submitted']['request_information'][$webform_node_request_hidden_public], $form_state['storage']['webform_node_request_hidden_public'], $form_state);
+  form_set_value($form['submitted']['request_information'][$webform_node_request_hidden], $form_state['storage']['webform_node_request_other'], $form_state);
+}
+
+/**
+ * Utility function to find the referenced node id
+ *
+ * @return int Node ID of requesting node
+ */
+function webform_node_request_get_nid() {
+  // handles the ?nid=# case //
+  if(isset($_GET['nid'])) {
+    return (int) $_GET['nid'];
+  }
+  // handles the /nid123 case (which may never happen but I'll leave it in here for filler //
+  foreach(arg() as $arg) {
+    if(strstr($arg, 'nid')) {
+      $start = strpos($arg, 'nid');
+      return substr($arg, $start+3);
+    }
+  }
+}
